@@ -1,11 +1,8 @@
-"""Streamlit dashboard showcasing the Amazon products + reviews pipelines.
-
-Renders the artifacts produced by:
-    01_structured_amazon_products.ipynb   -> data/amazon/amazon_products_clean.parquet
-    02_unstructured_amazon_reviews.ipynb  -> data/amazon_reviews/*.png, *.html, *.parquet
+"""Streamlit dashboard for the Amazon products + reviews pipelines.
 
 Run with:
-    streamlit run app.py
+    ./run.sh                 # executes notebooks 01 & 02, then launches streamlit
+    streamlit run app.py     # dashboard only (assumes artifacts already on disk)
 """
 from pathlib import Path
 
