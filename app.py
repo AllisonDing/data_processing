@@ -8,7 +8,6 @@ from pathlib import Path
 
 import polars as pl
 import streamlit as st
-from streamlit.components.v1 import html as st_html
 
 ROOT          = Path(__file__).parent
 DATA_DIR      = ROOT / "data"
@@ -47,41 +46,41 @@ def load_sentiment() -> pl.DataFrame | None:
 
 def show_image(path: Path, caption: str = "") -> None:
     if path.exists():
-        st.image(str(path), caption=caption, use_container_width=True)
+        st.image(str(path), caption=caption, width="stretch")
     else:
         st.info(f"Missing artifact `{path.name}` — re-run the notebook to generate it.")
 
 
-STATIC_DIR            = ROOT / "static"
-MAX_INLINE_HTML_BYTES = 20 * 1024 * 1024   # bigger than this and srcdoc chokes
-
-
-def show_html(path: Path, height: int = 700, static_url: str | None = None) -> None:
-    """Embed a saved plotly HTML.
-
-    Small files (< 20 MB) are read into a srcdoc iframe inline. Large files
-    must be served via Streamlit's static-file serving (./static -> /app/static)
-    — pass `static_url` so we render an iframe pointing at that URL instead of
-    base64-embedding the whole blob in the page.
-    """
+def show_html(path: Path, height: int = 700) -> None:
+    """Embed a saved plotly HTML with scrollbars when content overflows."""
     if not path.exists():
         st.info(f"Missing artifact `{path.name}` — re-run the notebook to generate it.")
         return
-    size = path.stat().st_size
-    if static_url is not None:
-        st_html(
-            f'<iframe src="{static_url}" width="100%" height="{height}" '
-            f'style="border:none"></iframe>',
-            height=height,
-        )
-        return
-    if size > MAX_INLINE_HTML_BYTES:
-        st.warning(
-            f"`{path.name}` is {size / 1e6:.0f} MB — too large to embed inline. "
-            f"Symlink it into `./static/` and pass `static_url` to stream via iframe."
-        )
-        return
-    st_html(path.read_text(encoding="utf-8"), height=height, scrolling=True)
+    html = path.read_text()
+    # Plotly's saved HTML clips multi-digit legend labels because the default
+    # legend.itemwidth (30px) only fits ~1 character at this font size. Patch
+    # the figure after it mounts so two/three-digit topic IDs render in full.
+    patch = """
+<style>.legend .scrollbox{overflow:visible!important}</style>
+<script>
+(function () {
+  const widenLegend = () => {
+    const plot = document.querySelector('.js-plotly-plot');
+    if (plot && window.Plotly) {
+      window.Plotly.relayout(plot, {'legend.itemwidth': 80});
+      return true;
+    }
+    return false;
+  };
+  if (!widenLegend()) {
+    const timer = setInterval(() => { if (widenLegend()) clearInterval(timer); }, 150);
+    setTimeout(() => clearInterval(timer), 5000);
+  }
+})();
+</script>
+"""
+    html = html.replace("</body>", patch + "</body>", 1)
+    st.components.v1.html(html, height=height, scrolling=True)
 
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
@@ -107,7 +106,7 @@ with tab_overview:
 | Notebook | Source | Pipeline | Output |
 |---|---|---|---|
 | `01_structured_amazon_products.ipynb` | Kaggle Amazon Products (139 CSVs) | Polars + cuDF GPU aggregations, Wilson rating score | `amazon_products_clean.parquet` |
-| `02_unstructured_amazon_reviews.ipynb` | McAuley Lab Amazon Reviews 2023 | Embedding (Nemotron 1B), Milvus vector store, BERTopic clustering | sentiment parquet + topic HTMLs |
+| `02_unstructured_amazon_reviews.ipynb` | McAuley Lab Amazon Reviews 2023 | Embedding (Nemotron 1B), Milvus vector store, BERTopic clustering | `sentiment parquet` + topic HTMLs |
 
 Every chart below was produced by running those notebooks end-to-end.
         """
@@ -151,7 +150,7 @@ with tab_products:
                          "discount_price", "discount_pct"])
                 .collect()
             )
-            st.dataframe(top_discount.to_pandas(), use_container_width=True)
+            st.dataframe(top_discount.to_pandas(), width="stretch")
 
         if {"ratings", "no_of_ratings"}.issubset(products.columns):
             st.markdown("##### Top 25 products by Wilson-score lower bound (≥100 ratings)")
@@ -169,7 +168,7 @@ with tab_products:
                          "ratings", "no_of_ratings", "wilson_score"])
                 .collect()
             )
-            st.dataframe(wilson.to_pandas(), use_container_width=True)
+            st.dataframe(wilson.to_pandas(), width="stretch")
 
 
 with tab_eda:
@@ -189,7 +188,7 @@ with tab_sent:
         st.markdown("##### Underlying monthly sentiment table")
         st.dataframe(
             sentiment.sort(["category", "dt"]).to_pandas(),
-            use_container_width=True,
+            width="stretch",
             height=400,
         )
 
@@ -197,11 +196,11 @@ with tab_sent:
 with tab_embed:
     st.subheader("Review embedding space (UMAP 2D)")
     show_image(REVIEWS_DIR / "review_embedding_space.png",
-               caption="UMAP projection — sentiment + category overlays")
+               caption="UMAP projection — sentiment + category + BERTopic cluster overlays")
     st.caption(
-        "BERTopic cluster overlay is available interactively in the **Topics** "
-        "tab (Document scatter) — the static PNG was dropped because 200+ topic "
-        "labels squashed the scatter plot into the top sliver of the canvas."
+        "Topic panel uses colour only (no legend) because 200+ HDBSCAN clusters "
+        "would otherwise dominate the canvas. Hover the **Document scatter** in "
+        "the Topics tab for per-cluster keyword labels."
     )
 
 
@@ -212,9 +211,9 @@ with tab_topics:
     topic_panels = [
         ("Intertopic distance map",   "bertopic_intertopic.html", 650),
         ("Top words per topic",       "bertopic_barchart.html",   700),
-        ("Topic similarity heatmap",  "bertopic_heatmap.html",    900),
-        ("Topic hierarchy",           "bertopic_hierarchy.html",  900),
-        ("Document scatter",          "bertopic_documents.html",  800),
+        ("Topic similarity heatmap",  "bertopic_heatmap.html",    1250),
+        ("Topic hierarchy",           "bertopic_hierarchy.html",  1050),
+        ("Document scatter",          "bertopic_documents.html",  1000),
     ]
     for title, fname, height in topic_panels:
         with st.expander(title, expanded=False):
@@ -224,12 +223,9 @@ with tab_topics:
 with tab_datamap:
     st.subheader("Document datamap")
     st.caption(
-        "Interactive scatter of all reviews with topic labels and hover tooltips. "
-        "The 58 MB HTML is streamed via an iframe (Streamlit static-file serving) "
-        "rather than inlined, so the page itself stays light."
+        "Interactive scatter of all reviews with topic labels and hover tooltips."
     )
     show_html(
         REVIEWS_DIR / "bertopic_document_datamap.html",
         height=900,
-        static_url="app/static/bertopic_document_datamap.html",
     )
