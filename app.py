@@ -953,15 +953,21 @@ def render_review_cards(search_results: pd.DataFrame) -> None:
         similarity = row.get("similarity", np.nan)
         sim_text = f"{float(similarity):.2f}" if pd.notna(similarity) else "n/a"
         cards.append(
-            f"""
-            <div class="review-card">
-                <strong>{text}</strong>
-                <span>{category}</span><span>{topic}</span><span>{sentiment}</span>
-                <span>rating {rating}</span><span>sim {sim_text}</span>
-            </div>
-            """
+            f'<div style="border-bottom:1px solid rgba(118,185,0,.12);padding:7px 2px 8px">'
+            f'<b style="display:block;color:#eef8ea;font-size:12px;line-height:1.25">{text}</b>'
+            f'<span style="display:inline-block;color:#91a08d;font-size:11px;margin:3px 8px 0 0">{category}</span>'
+            f'<span style="display:inline-block;color:#91a08d;font-size:11px;margin:3px 8px 0 0">{topic}</span>'
+            f'<span style="display:inline-block;color:#91a08d;font-size:11px;margin:3px 8px 0 0">{sentiment}</span>'
+            f'<span style="display:inline-block;color:#91a08d;font-size:11px;margin:3px 8px 0 0">rating {rating}</span>'
+            f'<span style="display:inline-block;color:#91a08d;font-size:11px;margin:3px 8px 0 0">sim {sim_text}</span>'
+            f'</div>'
         )
-    st.markdown(f"<div class='review-list'>{''.join(cards)}</div>", unsafe_allow_html=True)
+    st.markdown(
+        '<div style="height:372px;overflow-y:auto;padding-right:4px">'
+        + "".join(cards)
+        + "</div>",
+        unsafe_allow_html=True,
+    )
 
 
 def render_topic_rows(topic_summary: pd.DataFrame) -> None:
