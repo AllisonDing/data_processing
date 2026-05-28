@@ -4,6 +4,8 @@ Run with:
     ./run.sh                 # executes notebooks 01 & 02, then launches streamlit
     streamlit run app.py     # dashboard only (assumes artifacts already on disk)
 """
+import subprocess
+import sys
 from pathlib import Path
 
 import polars as pl
@@ -20,8 +22,10 @@ SENTIMENT_PARQUET = REVIEWS_DIR  / "amazon_reviews_sentiment.parquet"
 st.set_page_config(
     page_title="Amazon Data Pipelines",
     layout="wide",
-    initial_sidebar_state="collapsed",
+    initial_sidebar_state="expanded",
 )
+
+PIPELINE_SCRIPT = ROOT / "amazon_pipeline.py"
 
 st.title("Amazon Data Pipelines — Dashboard")
 st.caption(
@@ -81,6 +85,46 @@ def show_html(path: Path, height: int = 700) -> None:
 """
     html = html.replace("</body>", patch + "</body>", 1)
     st.components.v1.html(html, height=height, scrolling=True)
+
+
+# ── Sidebar: pipeline control ─────────────────────────────────────────────────
+with st.sidebar:
+    st.subheader("Pipeline control")
+    st.caption(
+        "Runs `amazon_pipeline.py` end-to-end with GPU acceleration "
+        "(via `python -m cudf.pandas -m cuml.accel`). Takes several minutes — "
+        "the page blocks until it finishes, then auto-refreshes."
+    )
+    if not PIPELINE_SCRIPT.exists():
+        st.error(f"`{PIPELINE_SCRIPT.name}` not found next to app.py.")
+    elif st.button("▶ Run pipeline", type="primary", use_container_width=True):
+        cmd = [
+            sys.executable, "-m", "cudf.pandas", "-m", "cuml.accel",
+            str(PIPELINE_SCRIPT),
+        ]
+        with st.status("Running pipeline — this can take ~10 min", expanded=True) as status:
+            log_box = st.empty()
+            log_lines: list[str] = []
+            proc = subprocess.Popen(
+                cmd, cwd=str(ROOT),
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, bufsize=1,
+            )
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                log_lines.append(line.rstrip())
+                # Keep only the last 30 lines visible — the full stream is huge
+                # and would lag the browser if we appended every model-load row.
+                log_box.code("\n".join(log_lines[-30:]), language="text")
+            rc = proc.wait()
+            if rc == 0:
+                status.update(label="Pipeline complete — reloading artifacts",
+                              state="complete", expanded=False)
+                st.cache_data.clear()
+                st.rerun()
+            else:
+                status.update(label=f"Pipeline failed (exit code {rc})",
+                              state="error")
 
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
