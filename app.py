@@ -438,9 +438,32 @@ def demo_products(seed: int = 7, n: int = 4200) -> pd.DataFrame:
 
 
 @st.cache_data(show_spinner=False)
-def demo_reviews(seed: int = 19, n: int = 9000) -> pd.DataFrame:
+def demo_reviews(seed: int = 21, n: int = 9000) -> pd.DataFrame:
     rng = np.random.default_rng(seed)
     categories = np.array(["Electronics", "Appliances", "Clothing"])
+    product_names = {
+        "Electronics": [
+            "Sony WH-1000XM5 headphones",
+            "Apple MacBook Pro laptop",
+            "Canon EOS R6 camera",
+            "Samsung T7 SSD drive",
+            "Amazon Echo Dot smart speaker",
+        ],
+        "Appliances": [
+            "Samsung RF28 fridge",
+            "Dyson V11 vacuum",
+            "LG WT7100CW washer",
+            "Coway Mighty air purifier",
+            "Breville BES870XL coffee maker",
+        ],
+        "Clothing": [
+            "Nike Air Max 90 sneakers",
+            "Lululemon Align leggings",
+            "Patagonia Down Sweater jacket",
+            "Coach Willow tote bag",
+            "Levi's 501 Original jeans",
+        ],
+    }
     topics = [
         "battery life",
         "delivery experience",
@@ -459,6 +482,7 @@ def demo_reviews(seed: int = 19, n: int = 9000) -> pd.DataFrame:
         topic_id = int(rng.integers(0, len(topics)))
         topic_label = topics[topic_id]
         category = str(rng.choice(categories))
+        product_name = str(rng.choice(product_names[category]))
         sentiment_score = float(np.clip(rng.normal(0.18, 0.55), -1, 1))
         sentiment = (
             "positive"
@@ -479,8 +503,13 @@ def demo_reviews(seed: int = 19, n: int = 9000) -> pd.DataFrame:
                 "sentiment": sentiment,
                 "sentiment_score": sentiment_score,
                 "review_text": (
-                    f"This {category.lower()} review focuses on {topic_label}. "
-                    f"The customer mentions performance, value, and whether the product met expectations."
+                    f"This {product_name} review focuses on {topic_label}. "
+                    f"The customer describes how the product handled real day-to-day use, "
+                    f"calling out specifics around {topic_label}, perceived value at this price, "
+                    f"and whether the experience matched what was advertised. "
+                    f"Overall sentiment was "
+                    f"{'positive — they would recommend it' if sentiment_score > 0.18 else 'negative — they would not buy again' if sentiment_score < -0.18 else 'mixed, with both strengths and gaps'}, "
+                    f"and the rating they gave reflects that balance."
                 ),
                 "topic_id": topic_id,
                 "topic_label": topic_label,
@@ -610,12 +639,14 @@ def filter_products(df: pd.DataFrame, categories: list[str], min_rating: float, 
     return out
 
 
-def search_reviews(df: pd.DataFrame, categories: list[str], query: str, top_k: int, min_similarity: float, sentiment_filter: list[str]) -> pd.DataFrame:
+def search_reviews(df: pd.DataFrame, categories: list[str], query: str, top_k: int, min_similarity: float, sentiment_filter: list[str], min_rating: float = 0.0) -> pd.DataFrame:
     out = df.copy()
     if categories:
         out = out[out["category"].isin(categories)]
     if sentiment_filter:
         out = out[out["sentiment"].isin(sentiment_filter)]
+    if min_rating > 0:
+        out = out[out["rating"].fillna(0) >= min_rating]
     if query.strip():
         terms = [t for t in query.lower().split() if t]
         if terms:
@@ -923,7 +954,7 @@ def render_review_cards(search_results: pd.DataFrame) -> None:
         return
     cards = []
     for _, row in search_results.iterrows():
-        text = html.escape(str(row.get("review_text", ""))[:150])
+        text = html.escape(str(row.get("review_text", "")))
         category = html.escape(str(row.get("category", "")))
         topic = html.escape(str(row.get("topic_label", "")))
         sentiment = html.escape(str(row.get("sentiment", "")))
@@ -964,7 +995,7 @@ def render_topic_rows(topic_summary: pd.DataFrame) -> None:
             f'</div><div class="topic-stat">{reviews:,}</div></div>'
         )
     st.markdown(
-        '<div style="height:800px;overflow-y:auto;padding-right:4px">'
+        '<div style="height:220px;overflow-y:auto;padding-right:4px">'
         + "".join(rows)
         + "</div>",
         unsafe_allow_html=True,
@@ -1020,6 +1051,29 @@ def topic_scatter(reviews: pd.DataFrame) -> go.Figure:
     return dark_fig(fig, 350)
 
 
+def find_pipeline_image(filename: str) -> Path | None:
+    candidates = [
+        DEPLOYMENT_ROOT / "data" / "amazon_reviews" / filename,
+        DEPLOYMENT_ROOT / "data" / "amazon" / filename,
+        APP_DIR / "data" / "amazon_reviews" / filename,
+        APP_DIR / "data" / "amazon" / filename,
+        APP_DIR.parent / "data" / "amazon_reviews" / filename,
+        APP_DIR.parent / "data" / "amazon" / filename,
+    ]
+    for path in candidates:
+        if path.exists():
+            return path
+    return None
+
+
+def show_pipeline_image(filename: str, caption: str) -> None:
+    path = find_pipeline_image(filename)
+    if path is not None:
+        st.image(str(path), caption=caption, use_container_width=True)
+    else:
+        st.info(f"{caption} — not found. Click Run Pipeline to generate.")
+
+
 def load_datamap_html() -> str | None:
     candidates = [
         DEPLOYMENT_ROOT / "data" / "amazon_reviews" / "bertopic_document_datamap.html",
@@ -1033,6 +1087,120 @@ def load_datamap_html() -> str | None:
             except Exception:
                 continue
     return None
+
+
+def products_overview_panels(products: pd.DataFrame) -> tuple[go.Figure | None, go.Figure | None, go.Figure | None]:
+    if products.empty:
+        return (None, None, None)
+
+    # Panel 1 — Price Distribution (log10) by category, overlay histograms
+    p1 = products.dropna(subset=["price"]).copy()
+    p1 = p1[p1["price"] > 0]
+    if p1.empty:
+        fig1 = None
+    else:
+        p1["log_price"] = np.log10(p1["price"].clip(lower=1))
+        fig1 = px.histogram(
+            p1, x="log_price", color="category", nbins=40,
+            title="Price Distribution (log scale)",
+            template="plotly_dark", barmode="overlay",
+            color_discrete_sequence=["#76b900", "#00bcd4", "#f7b731", "#ff5c5c", "#9b59ff"],
+        )
+        fig1.update_traces(opacity=0.55)
+        fig1.update_layout(xaxis_title="log10(Discount Price)", yaxis_title="Product Count")
+        fig1 = dark_fig(fig1, 340)
+
+    # Panel 2 — Average discount by category, horizontal bar
+    p2 = products.dropna(subset=["discount_pct"]).copy()
+    p2 = p2[(p2["discount_pct"] >= 0) & (p2["discount_pct"] <= 95)]
+    if p2.empty:
+        fig2 = None
+    else:
+        agg = (
+            p2.groupby("category", as_index=False)["discount_pct"].mean()
+            .round(1).sort_values("discount_pct", ascending=True)
+        )
+        fig2 = px.bar(
+            agg, x="discount_pct", y="category", orientation="h",
+            title="Average Discount by Category",
+            template="plotly_dark", text="discount_pct",
+            color_discrete_sequence=["#76b900"],
+        )
+        fig2.update_traces(texttemplate="%{text:.1f}%", textposition="outside")
+        fig2.update_layout(xaxis_title="Avg Discount %", yaxis_title="")
+        fig2 = dark_fig(fig2, 340)
+
+    # Panel 3 — Rating distribution by category, overlay histograms
+    p3 = products.dropna(subset=["rating"]).copy()
+    if p3.empty:
+        fig3 = None
+    else:
+        fig3 = px.histogram(
+            p3, x="rating", color="category", nbins=30,
+            title="Rating Distribution",
+            template="plotly_dark", barmode="overlay",
+            color_discrete_sequence=["#76b900", "#00bcd4", "#f7b731", "#ff5c5c", "#9b59ff"],
+        )
+        fig3.update_traces(opacity=0.55)
+        fig3.update_layout(xaxis_title="Star Rating", yaxis_title="Product Count")
+        fig3.update_xaxes(range=[1, 5])
+        fig3 = dark_fig(fig3, 340)
+
+    return (fig1, fig2, fig3)
+
+
+def _product_family(title: str, max_tokens: int = 3) -> str:
+    if not isinstance(title, str):
+        return ""
+    tokens = title.split()
+    while tokens and tokens[-1].isdigit():
+        tokens.pop()
+    return " ".join(tokens[:max_tokens]).strip()
+
+
+def top_products_figure(
+    products: pd.DataFrame, top_n: int = 20, sort_mode: str = "rating_desc"
+) -> go.Figure | None:
+    if products.empty:
+        return None
+    df = products.dropna(subset=["title", "rating_count"]).copy()
+    if df.empty:
+        return None
+    df["family"] = df["title"].astype(str).map(_product_family)
+    df = df[df["family"] != ""]
+    grouped = (
+        df.groupby("family", as_index=False)
+        .agg(rating_count=("rating_count", "sum"), category=("category", "first"))
+        .sort_values("rating_count", ascending=False)
+        .head(top_n)
+    )
+    if grouped.empty:
+        return None
+    # We want the FIRST row of `grouped` to render at the TOP of the chart.
+    # Plotly horizontal bar: categoryarray[0] renders at the BOTTOM, so we reverse the
+    # desired order before handing it to categoryorder="array".
+    if sort_mode == "category_family":
+        grouped = grouped.sort_values(["category", "family"], ascending=[True, True])
+    else:
+        grouped = grouped.sort_values("rating_count", ascending=False)
+    grouped["short_title"] = (
+        "[" + grouped["category"].astype(str).str.slice(0, 3) + "] "
+        + grouped["family"].astype(str).str.slice(0, 55)
+    )
+    category_order = grouped["short_title"].tolist()[::-1]  # reverse so first→top
+    fig = px.bar(
+        grouped, x="rating_count", y="short_title", orientation="h", color="category",
+        title=f"Top {top_n} Product Families by Rating Count",
+        template="plotly_dark", text="rating_count",
+        color_discrete_sequence=["#76b900", "#00bcd4", "#f7b731", "#ff5c5c", "#9b59ff"],
+    )
+    fig.update_traces(texttemplate="%{text:,}", textposition="outside")
+    fig.update_yaxes(categoryorder="array", categoryarray=category_order)
+    fig.update_layout(
+        xaxis_title="Rating Count (summed across family)",
+        yaxis_title="",
+    )
+    return dark_fig(fig, 560)
 
 
 def review_volume_figure(
@@ -1083,6 +1251,40 @@ def review_volume_figure(
         barmode="group",
     )
     return dark_fig(fig, 350)
+
+
+def discount_timeline_figure(products: pd.DataFrame, reviews: pd.DataFrame) -> go.Figure | None:
+    if reviews.empty or products.empty:
+        return None
+    prod_lookup = (
+        products.drop_duplicates("product_id")
+        .set_index("product_id")[["discount_pct"]]
+    )
+    merged = reviews.merge(prod_lookup, left_on="product_id", right_index=True, how="left")
+    merged = merged.dropna(subset=["review_month", "discount_pct"])
+    if merged.empty:
+        return None
+    merged["month"] = (
+        pd.to_datetime(merged["review_month"]).dt.to_period("M").dt.to_timestamp()
+    )
+    timeline = (
+        merged.groupby(["month", "category"], as_index=False)
+        .agg(avg_discount=("discount_pct", "mean"), n=("product_id", "count"))
+        .sort_values("month")
+    )
+    fig = px.line(
+        timeline,
+        x="month",
+        y="avg_discount",
+        color="category",
+        markers=True,
+        hover_data=["n"],
+        title="Discount Timeline",
+        template="plotly_dark",
+        color_discrete_sequence=["#76b900", "#00bcd4", "#f7b731", "#ff5c5c"],
+    )
+    fig.update_layout(yaxis_title="Average discount %", xaxis_title="Month")
+    return dark_fig(fig, 320)
 
 
 def sentiment_figure(reviews: pd.DataFrame) -> go.Figure | None:
@@ -1172,7 +1374,7 @@ def main() -> None:
             set(reviews_raw["category"].dropna().astype(str))
         )
     )
-    max_price = float(np.nanpercentile(products_raw["price"].fillna(0), 98)) if len(products_raw) else 1000.0
+    max_price = float(products_raw["price"].max()) if len(products_raw) and products_raw["price"].notna().any() else 1000.0
 
     mode_default = st.session_state.get("mode", "GPU")
     mode = mode_default
@@ -1248,7 +1450,7 @@ def main() -> None:
         topics_reviews = viz_reviews
         viz_products = products
     review_query_str = " ".join(review_query) if review_query else ""
-    search_results = search_reviews(reviews, categories, review_query_str, len(reviews), min_similarity, sentiment_filter)
+    search_results = search_reviews(reviews, categories, review_query_str, len(reviews), min_similarity, sentiment_filter, min_rating=min_rating)
     topic_summary = topic_summary_frame(topics_reviews)
 
     render_kpi_strip(products, reviews, mode)
@@ -1267,47 +1469,102 @@ def main() -> None:
         else:
             st.info("Not enough data to compute monthly review volume.")
 
-    PANEL_H = 1280
-    row2_left, row2_mid, row2_right = st.columns([1.0, 1.6, 1.1], gap="small")
-    with row2_left:
-        with st.container(border=True, height=PANEL_H):
-            st.markdown("<div class='panel-title'>Review Search</div>", unsafe_allow_html=True)
-            st.markdown("<div class='panel-caption'>Semantic-style retrieval over unstructured customer text.</div>", unsafe_allow_html=True)
-            render_review_cards(search_results)
-    with row2_mid:
-        with st.container(border=True, height=PANEL_H):
-            st.markdown("<div class='panel-title'>Topic Modeling - Document Datamap</div>", unsafe_allow_html=True)
-            st.markdown("<div class='panel-caption'>Interactive cluster map produced by the pipeline — drag to pan, scroll to zoom, hover to read.</div>", unsafe_allow_html=True)
-            datamap_html = load_datamap_html()
-            if datamap_html is not None:
-                components.html(datamap_html, height=1180, scrolling=False)
-            else:
-                st.info("Document datamap not found. Click 'Run Pipeline' to generate it.")
-    with row2_right:
-        with st.container(border=True, height=PANEL_H):
-            st.markdown("<div class='panel-title'>Embedding and Topics</div>", unsafe_allow_html=True)
-            st.markdown("<div class='panel-caption'>UMAP/HDBSCAN-style cluster map for review themes.</div>", unsafe_allow_html=True)
-            st.plotly_chart(topic_scatter(topics_reviews), use_container_width=True)
-            render_topic_rows(topic_summary)
-
-    bottom_left, bottom_mid, bottom_right = st.columns(3, gap="small")
-    with bottom_left:
+    trend_left, trend_right = st.columns(2, gap="small")
+    with trend_left:
         with st.container(border=True):
             sentiment = sentiment_figure(topics_reviews)
             if sentiment is not None:
                 st.plotly_chart(sentiment, use_container_width=True)
             else:
                 st.info("No review dates available for sentiment timeline.")
-    with bottom_mid:
+    with trend_right:
         with st.container(border=True):
-            st.plotly_chart(rating_histogram(viz_products), use_container_width=True)
-    with bottom_right:
-        with st.container(border=True):
-            corr = correlation_figure(viz_products, topics_reviews)
-            if corr is not None:
-                st.plotly_chart(corr, use_container_width=True)
+            disc = discount_timeline_figure(viz_products, topics_reviews)
+            if disc is not None:
+                st.plotly_chart(disc, use_container_width=True)
             else:
-                st.info("Not enough category overlap to compute correlations.")
+                st.info("Not enough discount/date data for the discount timeline.")
+
+    DATAMAP_H = 900
+    SUB_PANEL_H = 700
+
+    with st.container(border=True, height=DATAMAP_H):
+        st.markdown("<div class='panel-title'>Topic Modeling - Document Datamap</div>", unsafe_allow_html=True)
+        st.markdown("<div class='panel-caption'>Interactive cluster map produced by the pipeline — drag to pan, scroll to zoom, hover to read.</div>", unsafe_allow_html=True)
+        datamap_html = load_datamap_html()
+        if datamap_html is not None:
+            components.html(datamap_html, height=DATAMAP_H - 100, scrolling=False)
+        else:
+            st.info("Document datamap not found. Click 'Run Pipeline' to generate it.")
+
+    rs_col, et_col = st.columns(2, gap="small")
+    with rs_col:
+        with st.container(border=True, height=SUB_PANEL_H):
+            st.markdown("<div class='panel-title'>Review Search</div>", unsafe_allow_html=True)
+            st.markdown("<div class='panel-caption'>Semantic-style retrieval over unstructured customer text.</div>", unsafe_allow_html=True)
+            render_review_cards(search_results)
+    with et_col:
+        with st.container(border=True, height=SUB_PANEL_H):
+            st.markdown("<div class='panel-title'>Embedding and Topics</div>", unsafe_allow_html=True)
+            st.markdown("<div class='panel-caption'>UMAP/HDBSCAN-style cluster map for review themes.</div>", unsafe_allow_html=True)
+            st.plotly_chart(topic_scatter(topics_reviews), use_container_width=True)
+            render_topic_rows(topic_summary)
+
+    # Rating Distribution panel removed by user request.
+    # bottom_left, bottom_right = st.columns(2, gap="small")
+    # with bottom_left:
+    #     with st.container(border=True):
+    #         st.plotly_chart(rating_histogram(viz_products), use_container_width=True)
+    # with bottom_right:
+    #     with st.container(border=True):
+    #         corr = correlation_figure(viz_products, topics_reviews)
+    #         ...
+
+    # Products Overview panel removed by user request.
+    # with st.container(border=True):
+    #     st.markdown("<div class='panel-title'>Products Overview</div>", unsafe_allow_html=True)
+    #     st.markdown("<div class='panel-caption'>Live filtered view of price, discount, and rating distributions — updates with Category and Product keyword filters.</div>", unsafe_allow_html=True)
+    #     ov1, ov2, ov3 = products_overview_panels(products)
+    #     oc1, oc2, oc3 = st.columns(3, gap="small")
+    #     with oc1:
+    #         if ov1 is not None:
+    #             st.plotly_chart(ov1, use_container_width=True)
+    #         else:
+    #             st.info("No price data for the current filters.")
+    #     with oc2:
+    #         if ov2 is not None:
+    #             st.plotly_chart(ov2, use_container_width=True)
+    #         else:
+    #             st.info("No discount data for the current filters.")
+    #     with oc3:
+    #         if ov3 is not None:
+    #             st.plotly_chart(ov3, use_container_width=True)
+    #         else:
+    #             st.info("No rating data for the current filters.")
+
+    with st.container(border=True):
+        st.markdown("<div class='panel-title'>Top 20 Product Families by Rating Count</div>", unsafe_allow_html=True)
+        st.markdown("<div class='panel-caption'>Product families (base name with trailing variant tokens stripped). Rating counts summed across the family — live filtered.</div>", unsafe_allow_html=True)
+        sort_choice = st.radio(
+            "Sort",
+            ["By rating count (desc)", "By category, then family"],
+            horizontal=True,
+            key="top_products_sort",
+            label_visibility="collapsed",
+        )
+        sort_mode = "category_family" if sort_choice.startswith("By category") else "rating_desc"
+        prod_fig = top_products_figure(products, sort_mode=sort_mode)
+        if prod_fig is not None:
+            st.plotly_chart(prod_fig, use_container_width=True)
+        else:
+            st.info("No products match the current filters.")
+
+    with st.container(border=True):
+        corr = correlation_figure(viz_products, topics_reviews)
+        if corr is not None:
+            st.plotly_chart(corr, use_container_width=True)
+        else:
+            st.info("Not enough category overlap to compute correlations.")
 
 
 if __name__ == "__main__":

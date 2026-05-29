@@ -65,17 +65,48 @@ COMBINED_CSV      = PRODUCTS_DIR / "Amazon-Products.csv"  # fallback if no per-c
 # ── 02: Amazon Reviews (unstructured) ────────────────────────────────────────
 REVIEWS_DIR       = Path("./data/amazon_reviews").resolve()
 REVIEWS_DOWNLOAD  = True
+_REVIEW_ROOT = "https://mcauleylab.ucsd.edu/public_datasets/data/amazon_2023/raw/review_categories"
 REVIEW_URLS = [
-    "https://mcauleylab.ucsd.edu/public_datasets/data/amazon_2023/raw/review_categories/Appliances.jsonl.gz",
-    "https://mcauleylab.ucsd.edu/public_datasets/data/amazon_2023/raw/review_categories/Electronics.jsonl.gz",
-    "https://mcauleylab.ucsd.edu/public_datasets/data/amazon_2023/raw/review_categories/Clothing_Shoes_and_Jewelry.jsonl.gz",
+    f"{_REVIEW_ROOT}/All_Beauty.jsonl.gz",
+    f"{_REVIEW_ROOT}/Amazon_Fashion.jsonl.gz",
+    f"{_REVIEW_ROOT}/Appliances.jsonl.gz",
+    f"{_REVIEW_ROOT}/Arts_Crafts_and_Sewing.jsonl.gz",
+    f"{_REVIEW_ROOT}/Automotive.jsonl.gz",
+    f"{_REVIEW_ROOT}/Baby_Products.jsonl.gz",
+    f"{_REVIEW_ROOT}/Beauty_and_Personal_Care.jsonl.gz",
+    f"{_REVIEW_ROOT}/Books.jsonl.gz",
+    f"{_REVIEW_ROOT}/CDs_and_Vinyl.jsonl.gz",
+    f"{_REVIEW_ROOT}/Cell_Phones_and_Accessories.jsonl.gz",
+    f"{_REVIEW_ROOT}/Clothing_Shoes_and_Jewelry.jsonl.gz",
+    f"{_REVIEW_ROOT}/Digital_Music.jsonl.gz",
+    f"{_REVIEW_ROOT}/Electronics.jsonl.gz",
+    f"{_REVIEW_ROOT}/Gift_Cards.jsonl.gz",
+    f"{_REVIEW_ROOT}/Grocery_and_Gourmet_Food.jsonl.gz",
+    f"{_REVIEW_ROOT}/Handmade_Products.jsonl.gz",
+    f"{_REVIEW_ROOT}/Health_and_Household.jsonl.gz",
+    f"{_REVIEW_ROOT}/Health_and_Personal_Care.jsonl.gz",
+    f"{_REVIEW_ROOT}/Home_and_Kitchen.jsonl.gz",
+    f"{_REVIEW_ROOT}/Industrial_and_Scientific.jsonl.gz",
+    f"{_REVIEW_ROOT}/Kindle_Store.jsonl.gz",
+    f"{_REVIEW_ROOT}/Magazine_Subscriptions.jsonl.gz",
+    f"{_REVIEW_ROOT}/Movies_and_TV.jsonl.gz",
+    f"{_REVIEW_ROOT}/Musical_Instruments.jsonl.gz",
+    f"{_REVIEW_ROOT}/Office_Products.jsonl.gz",
+    f"{_REVIEW_ROOT}/Patio_Lawn_and_Garden.jsonl.gz",
+    f"{_REVIEW_ROOT}/Pet_Supplies.jsonl.gz",
+    f"{_REVIEW_ROOT}/Software.jsonl.gz",
+    f"{_REVIEW_ROOT}/Sports_and_Outdoors.jsonl.gz",
+    f"{_REVIEW_ROOT}/Subscription_Boxes.jsonl.gz",
+    f"{_REVIEW_ROOT}/Tools_and_Home_Improvement.jsonl.gz",
+    f"{_REVIEW_ROOT}/Toys_and_Games.jsonl.gz",
+    f"{_REVIEW_ROOT}/Unknown.jsonl.gz",
+    f"{_REVIEW_ROOT}/Video_Games.jsonl.gz",
 ]
 REVIEW_FILES = {
-    "Appliances":              REVIEWS_DIR / "Appliances.jsonl.gz",
-    "Electronics":             REVIEWS_DIR / "Electronics.jsonl.gz",
-    "Clothing_Shoes_Jewelry":  REVIEWS_DIR / "Clothing_Shoes_and_Jewelry.jsonl.gz",
+    Path(url).name.replace(".jsonl.gz", ""): REVIEWS_DIR / Path(url).name
+    for url in REVIEW_URLS
 }
-MAX_REVIEWS_PER_CAT = 100_000   # cap per category — full files can be millions of rows
+MAX_REVIEWS_PER_CAT = None      # None = no cap (full population). Set to an int to subsample.
 MIN_REVIEW_CHARS    = 50        # drop reviews shorter than this (low-signal)
 VERIFIED_ONLY       = False     # True = keep only verified purchases
 
@@ -93,9 +124,6 @@ MILVUS_URI       = str(REVIEWS_DIR / "milvus_reviews.db")
 MILVUS_RESET     = True   # clear Milvus Lite db on startup
 ELASTIC_HOST     = "localhost"
 ELASTIC_PORT     = 9200
-
-# Topic modeling viz
-TOP_N_TOPICS_VIZ = 30   # cap on legend / scatter labels (BERTopic can produce 200+ topics)
 
 # ── 10: Optional Presto fallback (from 01 Step 10) ───────────────────────────
 USE_PRESTO_FALLBACK = False   # True = also run the SQL/Presto path against the cleaned parquet
@@ -324,6 +352,7 @@ if "ratings" in products.columns and "no_of_ratings" in products.columns:
 
 
 # ── Step 8: overview plots ───────────────────────────────────────────────────
+plt.style.use("dark_background")  # match the Streamlit dashboard's dark theme
 n_cats     = products["source_category"].n_unique()
 fig_height = max(6, n_cats * 0.05)
 fig, axes  = plt.subplots(1, 3, figsize=(20, fig_height))
@@ -492,7 +521,7 @@ def stable_id(user_id: str, asin: str, idx: int) -> str:
 def load_reviews_jsonl_gz(
     path: Path,
     category: str,
-    max_rows: int,
+    max_rows: int | None,
     min_chars: int = MIN_REVIEW_CHARS,
     verified_only: bool = VERIFIED_ONLY,
 ) -> list[dict]:
@@ -527,7 +556,7 @@ def load_reviews_jsonl_gz(
                 "verified":     bool(verified),
                 "text_len":     len(text[:8192]),
             })
-            if len(records) >= max_rows:
+            if max_rows is not None and len(records) >= max_rows:
                 break
     return records
 
@@ -549,6 +578,8 @@ df_reviews = collect(pl.from_dicts(all_records).lazy())
 
 
 # ── Step 2: EDA plots ────────────────────────────────────────────────────────
+# Disabled: rating_distribution.png + review_length_dist.png are no longer displayed in app.py.
+""" disabled-eda-plots
 eda = collect(df_reviews.lazy().select(["category", "rating", "text_len"]))
 by_cat = eda.partition_by("category", as_dict=True)
 cats = sorted(by_cat.keys())
@@ -583,6 +614,7 @@ ax.grid(alpha=0.3)
 plt.tight_layout()
 plt.savefig(REVIEWS_DIR / "review_length_dist.png", dpi=120)
 plt.show()
+"""
 
 
 # ── Step 3: pipeline schema ──────────────────────────────────────────────────
@@ -868,7 +900,8 @@ monthly_lf = (
 )
 df_ts, monthly = collect_all([df_ts_lf, monthly_lf])
 
-# Monthly sentiment plot
+# Monthly sentiment plot — disabled (monthly_sentiment.png is no longer displayed in app.py).
+""" disabled-monthly-sentiment-plot
 cats_available = sorted(collect(monthly.lazy().select("category").unique())["category"].to_list())
 slices = collect_all([
     monthly.lazy().filter(pl.col("category") == cat).sort("dt")
@@ -905,6 +938,7 @@ plt.xticks(rotation=120)
 plt.tight_layout()
 plt.savefig(REVIEWS_DIR / "monthly_sentiment.png", dpi=120)
 plt.show()
+"""
 
 # Export monthly sentiment for the Streamlit dashboard
 SENTIMENT_PARQUET = REVIEWS_DIR / "amazon_reviews_sentiment.parquet"
@@ -922,7 +956,9 @@ hdbscan_model = HDBSCAN(min_cluster_size=50, min_samples=10,
 topic_model   = BERTopic(umap_model=umap_model, hdbscan_model=hdbscan_model)
 topics, probs = topic_model.fit_transform(review_texts, embeddings=embeddings)
 
-# 2D UMAP for visualization (separate from the 5D one used by BERTopic)
+# 2D UMAP for visualization — disabled (only fed review_embedding_space.png and
+# the commented-out visualize_documents block; neither is displayed in app.py).
+""" disabled-2d-umap-and-step10
 umap_2d = UMAP(n_components=2, n_neighbors=15, min_dist=0.05,
                metric="cosine", random_state=42)
 coords = umap_2d.fit_transform(embeddings)
@@ -997,6 +1033,7 @@ plt.suptitle("Amazon Reviews 2023 — Embedding Space (UMAP 2D)",
 plt.tight_layout()
 plt.savefig(REVIEWS_DIR / "review_embedding_space.png", dpi=130, bbox_inches="tight")
 plt.show()
+"""
 
 
 # ── Step 11: BERTopic HTML visualizations ────────────────────────────────────
