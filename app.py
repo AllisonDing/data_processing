@@ -13,6 +13,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
+import streamlit.components.v1 as components
 
 
 APP_PATH = Path(__file__).resolve()
@@ -88,7 +89,7 @@ REVIEW_FILES = [
 st.set_page_config(
     page_title="CUDA-X Amazon Workbench",
     layout="wide",
-    initial_sidebar_state="collapsed",
+    initial_sidebar_state="expanded",
 )
 
 
@@ -340,6 +341,13 @@ def inject_css() -> None:
             border-radius: 8px;
             overflow: hidden;
         }
+        [data-baseweb="popover"] ul[role="listbox"]:empty,
+        [data-baseweb="popover"] ul[role="listbox"] > li[aria-disabled="true"],
+        [data-baseweb="popover"]:has(ul[role="listbox"]:empty),
+        [data-baseweb="popover"]:has(ul[role="listbox"] > li[aria-disabled="true"]:only-child),
+        [data-baseweb="popover"]:not(:has(li[role="option"]:not([aria-disabled="true"]))) {
+            display: none !important;
+        }
         @media (max-width: 900px) {
             .topbar { grid-template-columns: 1fr; }
             .top-meta { justify-content: flex-start; flex-wrap: wrap; }
@@ -585,16 +593,20 @@ def run_pipeline(mode: str) -> dict[str, str | float | bool]:
         }
 
 
-def filter_products(df: pd.DataFrame, categories: list[str], min_rating: float, min_discount: float, price_range: tuple[float, float], query: str) -> pd.DataFrame:
+def filter_products(df: pd.DataFrame, categories: list[str], min_rating: float, min_discount: float, price_range: tuple[float, float], queries: list[str]) -> pd.DataFrame:
     out = df.copy()
     if categories:
         out = out[out["category"].isin(categories)]
     out = out[out["rating"].fillna(0) >= min_rating]
     out = out[out["discount_pct"].fillna(0) >= min_discount]
     out = out[out["price"].fillna(0).between(price_range[0], price_range[1])]
-    if query.strip():
-        q = query.strip().lower()
-        out = out[out["title"].astype(str).str.lower().str.contains(q, na=False)]
+    terms = [q.strip().lower() for q in queries if q and q.strip()]
+    if terms:
+        text = out["title"].astype(str).str.lower()
+        mask = pd.Series(False, index=out.index)
+        for term in terms:
+            mask = mask | text.str.contains(term, na=False, regex=False)
+        out = out[mask]
     return out
 
 
@@ -814,40 +826,6 @@ def correlation_panel(products: pd.DataFrame, reviews: pd.DataFrame) -> None:
     st.plotly_chart(fig, use_container_width=True)
 
 
-def developer_tools(mode: str) -> None:
-    st.subheader("Developer Tools Exposed In The UI")
-    gpu_cmd = "python -m cudf.pandas -m cuml.accel amazon_pipeline.py"
-    cpu_cmd = "python amazon_pipeline.py"
-    pipeline = find_pipeline()
-    st.markdown(
-        """
-        <span class='tool-chip'>Run Pipeline</span>
-        <span class='tool-chip'>Compare CPU/GPU</span>
-        <span class='tool-chip'>Search Reviews</span>
-        <span class='tool-chip'>Inspect Topics</span>
-        <span class='tool-chip'>Export Artifacts</span>
-        <span class='tool-chip'>Generate Insight View</span>
-        """,
-        unsafe_allow_html=True,
-    )
-    st.code(gpu_cmd if mode == "GPU" else cpu_cmd, language="bash")
-    if pipeline:
-        st.success(f"Pipeline detected: {pipeline}")
-    else:
-        st.warning("Pipeline not detected. Set AMAZON_PIPELINE_PATH or place amazon_pipeline.py next to this app or one folder above it.")
-    st.markdown(
-        """
-        <div class='small-note'>
-        Suggested API contract for a React/FastAPI version:
-        /api/products/summary, /api/products/search, /api/reviews/search,
-        /api/reviews/timeseries, /api/reviews/clusters, /api/topics,
-        /api/pipeline/run, /api/benchmark.
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
 def dark_fig(fig: go.Figure, height: int) -> go.Figure:
     fig.update_layout(
         height=height,
@@ -878,7 +856,7 @@ def render_topbar(mode: str, pipeline: Path | None) -> None:
                 <div class="brand-title">Amazon Product + Review Intelligence</div>
             </div>
             <div class="top-meta">
-                <span>Structured: cuDF / Polars</span>
+                <span>Structured: Polars / Presto</span>
                 <span>Unstructured: Vector Search / BERTopic</span>
                 <span>ML: UMAP / HDBSCAN</span>
             </div>
@@ -975,7 +953,7 @@ def render_topic_rows(topic_summary: pd.DataFrame) -> None:
         st.info("No topics for the current filters.")
         return
     rows = []
-    for _, row in topic_summary.head(12).iterrows():
+    for _, row in topic_summary.iterrows():
         name = html.escape(str(row["topic_label"]))
         reviews = int(row["reviews"])
         sentiment = float(row["avg_sentiment"])
@@ -994,8 +972,7 @@ def render_topic_rows(topic_summary: pd.DataFrame) -> None:
 
 
 def product_scatter(products: pd.DataFrame) -> go.Figure:
-    sample = products.sample(min(len(products), 1600), random_state=2) if len(products) else products
-    sample = sample.copy()
+    sample = products.copy()
     sample["rating_count"] = sample["rating_count"].fillna(1).clip(lower=1)
     fig = px.scatter(
         sample,
@@ -1013,22 +990,24 @@ def product_scatter(products: pd.DataFrame) -> go.Figure:
 
 
 def rating_histogram(products: pd.DataFrame) -> go.Figure:
+    data = products.copy()
+    data["rating"] = data["rating"].round(1)
     fig = px.histogram(
-        products,
-        x="rating",
+        data,
+        y="rating",
         color="category",
-        nbins=24,
         title="Rating Distribution",
         template="plotly_dark",
         color_discrete_sequence=["#76b900", "#00bcd4", "#f7b731", "#ff5c5c", "#9b59ff"],
     )
-    return dark_fig(fig, 230)
+    fig.update_traces(ybins=dict(start=1.0, end=5.05, size=0.1))
+    fig.update_layout(xaxis_title="count", yaxis_title="rating", bargap=0.15)
+    return dark_fig(fig, 320)
 
 
 def topic_scatter(reviews: pd.DataFrame) -> go.Figure:
-    sample = reviews.sample(min(len(reviews), 2600), random_state=3) if len(reviews) else reviews
     fig = px.scatter(
-        sample,
+        reviews,
         x="x",
         y="y",
         color="topic_label",
@@ -1038,6 +1017,71 @@ def topic_scatter(reviews: pd.DataFrame) -> go.Figure:
         color_discrete_sequence=px.colors.qualitative.Set3,
     )
     fig.update_traces(marker=dict(size=5, opacity=0.74, line=dict(width=0)))
+    return dark_fig(fig, 350)
+
+
+def load_datamap_html() -> str | None:
+    candidates = [
+        DEPLOYMENT_ROOT / "data" / "amazon_reviews" / "bertopic_document_datamap.html",
+        APP_DIR / "data" / "amazon_reviews" / "bertopic_document_datamap.html",
+        APP_DIR.parent / "data" / "amazon_reviews" / "bertopic_document_datamap.html",
+    ]
+    for path in candidates:
+        if path.exists():
+            try:
+                return path.read_text()
+            except Exception:
+                continue
+    return None
+
+
+def review_volume_figure(
+    products: pd.DataFrame,
+    reviews: pd.DataFrame,
+    categories: list[str],
+    categories_all: list[str],
+) -> go.Figure | None:
+    if reviews.empty or products.empty:
+        return None
+    if not categories or set(categories) == set(categories_all):
+        group_col = "prod_category"
+        label = "Category"
+    else:
+        group_col = "prod_subcategory"
+        label = "Subcategory"
+    prod_lookup = (
+        products.drop_duplicates("product_id")
+        .set_index("product_id")[["rating_count", "category", "subcategory"]]
+        .rename(columns={"category": "prod_category", "subcategory": "prod_subcategory"})
+    )
+    merged = reviews.merge(prod_lookup, left_on="product_id", right_index=True, how="left")
+    if categories and set(categories) != set(categories_all):
+        merged = merged[merged["prod_category"].isin(categories)]
+    merged = merged.dropna(subset=["review_month", "rating_count", group_col])
+    if merged.empty:
+        return None
+    n_reviews_per_product = merged.groupby("product_id").size().rename("n_reviews_per_product")
+    merged = merged.merge(n_reviews_per_product, left_on="product_id", right_index=True, how="left")
+    merged["volume"] = merged["rating_count"] / merged["n_reviews_per_product"].clip(lower=1)
+    merged["month"] = pd.to_datetime(merged["review_month"]).dt.to_period("M").dt.to_timestamp()
+    grouped = (
+        merged.groupby(["month", group_col], as_index=False)["volume"]
+        .sum()
+        .sort_values("month")
+    )
+    fig = px.bar(
+        grouped,
+        x="month",
+        y="volume",
+        color=group_col,
+        title=f"Review Volume by Month (per {label})",
+        template="plotly_dark",
+        color_discrete_sequence=px.colors.qualitative.Set2,
+    )
+    fig.update_layout(
+        yaxis_title="Review volume (rating-count weighted)",
+        barmode="group",
+    )
     return dark_fig(fig, 350)
 
 
@@ -1061,7 +1105,7 @@ def sentiment_figure(reviews: pd.DataFrame) -> go.Figure | None:
         template="plotly_dark",
         color_discrete_sequence=["#76b900", "#00bcd4", "#f7b731", "#ff5c5c"],
     )
-    return dark_fig(fig, 250)
+    return dark_fig(fig, 320)
 
 
 def correlation_figure(products: pd.DataFrame, reviews: pd.DataFrame) -> go.Figure | None:
@@ -1104,7 +1148,7 @@ def correlation_figure(products: pd.DataFrame, reviews: pd.DataFrame) -> go.Figu
                     line=dict(color="#76b900", width=2),
                 )
             )
-    return dark_fig(fig, 250)
+    return dark_fig(fig, 320)
 
 
 def top_deals_frame(products: pd.DataFrame) -> pd.DataFrame:
@@ -1134,53 +1178,52 @@ def main() -> None:
     mode = mode_default
     render_topbar(mode, find_pipeline())
 
-    with st.container(border=True):
+    with st.sidebar:
         st.markdown("<div class='panel-title'>Control Surface</div>", unsafe_allow_html=True)
-        c1, c2, c3, c4, c5 = st.columns([0.7, 0.9, 1.6, 1.2, 1.3], gap="small")
-        with c1:
-            mode = st.radio("Engine", ["GPU", "CPU"], horizontal=True, key="mode")
-        with c2:
-            run = st.button("Run Pipeline", type="primary", use_container_width=True)
-        with c3:
-            categories = st.multiselect("Category", categories_all, default=categories_all[:3])
-        with c4:
-            product_query = st.text_input("Product keyword", "", placeholder="camera, laptop, shoes")
-        with c5:
-            review_query = st.text_input("Review search", "battery value", placeholder="query customer reviews")
-
-        f1, f2, f3, f4, f5 = st.columns([1.1, 1.1, 1.4, 1.0, 1.2], gap="small")
-        with f1:
-            min_rating = st.slider("Min rating", 1.0, 5.0, 3.5, 0.1)
-        with f2:
-            min_discount = st.slider("Min discount", 0.0, 80.0, 10.0, 1.0)
-        with f3:
-            price_range = st.slider("Price range", 0.0, max(max_price, 1.0), (0.0, max(max_price, 1.0)), 1.0)
-        with f4:
-            top_k = st.slider("Top-k", 5, 50, 15, 5)
-        with f5:
-            min_similarity = st.slider("Similarity", 0.0, 1.0, 0.45, 0.05)
-
-        d1, d2 = st.columns([1.2, 2.4], gap="small")
-        with d1:
-            sentiment_filter = st.multiselect(
-                "Sentiment",
-                ["positive", "neutral", "negative"],
-                default=["positive", "neutral", "negative"],
-            )
-        with d2:
-            with st.expander("Pipeline debug and path override"):
-                st.text_input(
-                    "Pipeline path override",
-                    placeholder="/home/allisond/data_processing/amazon_pipeline.py",
-                    key="pipeline_path_override",
-                    help="The path must be visible to the machine running Streamlit.",
-                )
-                pipeline = find_pipeline()
-                if pipeline:
-                    st.success(f"Found: {pipeline}")
-                else:
-                    st.error("amazon_pipeline.py not found")
-                st.code(pipeline_debug_text(), language="text")
+        mode = st.radio("Engine", ["GPU", "CPU"], horizontal=True, key="mode")
+        run = st.button("Run Pipeline", type="primary", use_container_width=True)
+        categories = st.multiselect("Category", categories_all, default=categories_all[:3])
+        if categories:
+            relevant_products = products_raw[products_raw["category"].isin(categories)]
+            relevant_reviews = reviews_raw[reviews_raw["category"].isin(categories)]
+        else:
+            relevant_products = products_raw
+            relevant_reviews = reviews_raw
+        product_query_options = sorted(
+            {
+                str(s).strip().lower()
+                for s in relevant_products["subcategory"].dropna().unique()
+                if str(s).strip() and str(s).strip().lower() != "unknown"
+            }
+        )
+        product_query = st.multiselect(
+            "Product keyword",
+            product_query_options,
+            default=[],
+            placeholder="All products",
+        )
+        review_query_options = sorted(
+            {
+                str(s).strip()
+                for s in relevant_reviews["topic_label"].dropna().unique()
+                if str(s).strip()
+            }
+        )
+        review_query = st.multiselect(
+            "Review search",
+            review_query_options,
+            default=[],
+            placeholder="All reviews",
+        )
+        min_rating = st.slider("Min rating", 1.0, 5.0, 3.5, 0.1)
+        min_discount = st.slider("Min discount", 0.0, 80.0, 10.0, 1.0)
+        price_range = st.slider("Price range", 0.0, max(max_price, 1.0), (0.0, max(max_price, 1.0)), 1.0)
+        min_similarity = st.slider("Similarity", 0.0, 1.0, 0.45, 0.05)
+        sentiment_filter = st.multiselect(
+            "Sentiment",
+            ["positive", "neutral", "negative"],
+            default=["positive", "neutral", "negative"],
+        )
 
     if run:
         with st.status("Running pipeline", expanded=True) as status:
@@ -1194,8 +1237,17 @@ def main() -> None:
 
     products = filter_products(products_raw, categories, min_rating, min_discount, price_range, product_query)
     reviews = reviews_raw[reviews_raw["category"].isin(categories)] if categories else reviews_raw
-    search_results = search_reviews(reviews, categories, review_query, top_k, min_similarity, sentiment_filter)
-    topic_summary = topic_summary_frame(reviews)
+    if product_query:
+        viz_reviews = reviews[reviews["product_id"].isin(products["product_id"])]
+    else:
+        viz_reviews = reviews
+    if review_query:
+        topics_reviews = viz_reviews[viz_reviews["topic_label"].isin(review_query)]
+    else:
+        topics_reviews = viz_reviews
+    review_query_str = " ".join(review_query) if review_query else ""
+    search_results = search_reviews(reviews, categories, review_query_str, len(reviews), min_similarity, sentiment_filter)
+    topic_summary = topic_summary_frame(topics_reviews)
 
     render_kpi_strip(products, reviews, mode)
     stage_cards(mode, products, reviews)
@@ -1204,48 +1256,55 @@ def main() -> None:
         unsafe_allow_html=True,
     )
 
-    left, middle, right = st.columns([1.15, 1.05, 1.0], gap="small")
-    with left:
-        with st.container(border=True):
-            st.markdown("<div class='panel-title'>Structured Product Explorer</div>", unsafe_allow_html=True)
-            st.markdown("<div class='panel-caption'>GPU-style filtering over products, price, rating, and discount.</div>", unsafe_allow_html=True)
-            st.plotly_chart(product_scatter(products), use_container_width=True)
-            st.markdown("<div class='panel-caption'>Top discounted products</div>", unsafe_allow_html=True)
-            st.dataframe(top_deals_frame(products), use_container_width=True, hide_index=True, height=214)
+    with st.container(border=True):
+        st.markdown("<div class='panel-title'>Review Volume by Month</div>", unsafe_allow_html=True)
+        st.markdown("<div class='panel-caption'>Rating-count weighted monthly review volume — by category when none/all are selected, by subcategory when drilling down.</div>", unsafe_allow_html=True)
+        volume_fig = review_volume_figure(products_raw, viz_reviews, categories, categories_all)
+        if volume_fig is not None:
+            st.plotly_chart(volume_fig, use_container_width=True)
+        else:
+            st.info("Not enough data to compute monthly review volume.")
 
-    with middle:
+    row2_left, row2_mid, row2_right = st.columns([1.0, 1.6, 1.1], gap="small")
+    with row2_left:
         with st.container(border=True):
             st.markdown("<div class='panel-title'>Review Search</div>", unsafe_allow_html=True)
             st.markdown("<div class='panel-caption'>Semantic-style retrieval over unstructured customer text.</div>", unsafe_allow_html=True)
             render_review_cards(search_results)
+    with row2_mid:
         with st.container(border=True):
-            sentiment = sentiment_figure(reviews)
+            st.markdown("<div class='panel-title'>Topic Modeling - Document Datamap</div>", unsafe_allow_html=True)
+            st.markdown("<div class='panel-caption'>Interactive cluster map produced by the pipeline — drag to pan, scroll to zoom, hover to read.</div>", unsafe_allow_html=True)
+            datamap_html = load_datamap_html()
+            if datamap_html is not None:
+                components.html(datamap_html, height=580, scrolling=False)
+            else:
+                st.info("Document datamap not found. Click 'Run Pipeline' to generate it.")
+    with row2_right:
+        with st.container(border=True):
+            st.markdown("<div class='panel-title'>Embedding and Topics</div>", unsafe_allow_html=True)
+            st.markdown("<div class='panel-caption'>UMAP/HDBSCAN-style cluster map for review themes.</div>", unsafe_allow_html=True)
+            st.plotly_chart(topic_scatter(topics_reviews), use_container_width=True)
+            render_topic_rows(topic_summary)
+
+    bottom_left, bottom_mid, bottom_right = st.columns(3, gap="small")
+    with bottom_left:
+        with st.container(border=True):
+            sentiment = sentiment_figure(viz_reviews)
             if sentiment is not None:
                 st.plotly_chart(sentiment, use_container_width=True)
             else:
                 st.info("No review dates available for sentiment timeline.")
-
-    with right:
-        with st.container(border=True):
-            st.markdown("<div class='panel-title'>Embedding and Topics</div>", unsafe_allow_html=True)
-            st.markdown("<div class='panel-caption'>UMAP/HDBSCAN-style cluster map for review themes.</div>", unsafe_allow_html=True)
-            st.plotly_chart(topic_scatter(reviews), use_container_width=True)
-            render_topic_rows(topic_summary)
-
-    bottom_left, bottom_right = st.columns([1.0, 1.0], gap="small")
-    with bottom_left:
+    with bottom_mid:
         with st.container(border=True):
             st.plotly_chart(rating_histogram(products), use_container_width=True)
     with bottom_right:
         with st.container(border=True):
-            corr = correlation_figure(products, reviews)
+            corr = correlation_figure(products, viz_reviews)
             if corr is not None:
                 st.plotly_chart(corr, use_container_width=True)
             else:
                 st.info("Not enough category overlap to compute correlations.")
-
-    with st.container(border=True):
-        developer_tools(mode)
 
 
 if __name__ == "__main__":

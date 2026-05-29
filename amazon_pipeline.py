@@ -1000,60 +1000,62 @@ plt.show()
 
 
 # ── Step 11: BERTopic HTML visualizations ────────────────────────────────────
-fig = topic_model.visualize_topics()
-fig.write_html(str(REVIEWS_DIR / "bertopic_intertopic.html"))
-
-fig = topic_model.visualize_barchart(top_n_topics=12, n_words=8, height=300)
-fig.write_html(str(REVIEWS_DIR / "bertopic_barchart.html"))
-
-# Top-60 heatmap with explicit margins for rotated labels
-fig = topic_model.visualize_heatmap(top_n_topics=60, width=1100, height=1100)
-fig.update_xaxes(tickangle=-90)
-fig.update_layout(margin=dict(l=180, r=140, b=240, t=120))
-fig.update_traces(
-    selector=dict(type="heatmap"),
-    colorbar=dict(
-        title=dict(text="Similarity Score", side="top"),
-        len=0.85, y=0.5, yanchor="middle",
-    ),
-)
-fig.write_html(str(REVIEWS_DIR / "bertopic_heatmap.html"))
-
-# Top-60 hierarchy dendrogram
-fig = topic_model.visualize_hierarchy(top_n_topics=60, width=1100, height=1200)
-fig.update_layout(margin=dict(l=300, r=20, b=40, t=80))
-fig.write_html(str(REVIEWS_DIR / "bertopic_hierarchy.html"))
-
-# Top-N documents scatter (reuses the 2D coords from above)
-top_topics = (
-    topic_model.get_topic_info()
-    .query("Topic != -1")
-    .nlargest(TOP_N_TOPICS_VIZ, "Count")["Topic"]
-    .tolist()
-)
-fig = topic_model.visualize_documents(
-    review_texts,
-    embeddings=embeddings,
-    reduced_embeddings=coords,
-    topics=top_topics,
-    hide_annotations=True,
-    sample=min(1.0, 8000 / max(len(review_texts), 1)),
-    width=1600,
-)
-x_lo, x_hi = np.percentile(coords[:, 0], [1, 99])
-y_lo, y_hi = np.percentile(coords[:, 1], [1, 99])
-x_pad = (x_hi - x_lo) * 0.03
-y_pad = (y_hi - y_lo) * 0.03
-fig.update_layout(
-    xaxis=dict(range=[x_lo - x_pad, x_hi + x_pad]),
-    yaxis=dict(range=[y_lo - y_pad, y_hi + y_pad]),
-    margin=dict(l=60, r=500, b=60, t=80),
-    legend=dict(font=dict(size=10), itemsizing="constant",
-                x=1.02, xanchor="left", y=1.0),
-)
-fig.write_html(str(REVIEWS_DIR / "bertopic_documents.html"))
+# fig = topic_model.visualize_topics()
+# fig.write_html(str(REVIEWS_DIR / "bertopic_intertopic.html"))
+#
+# fig = topic_model.visualize_barchart(top_n_topics=12, n_words=8, height=300)
+# fig.write_html(str(REVIEWS_DIR / "bertopic_barchart.html"))
+#
+# # Top-60 heatmap with explicit margins for rotated labels
+# fig = topic_model.visualize_heatmap(top_n_topics=60, width=1100, height=1100)
+# fig.update_xaxes(tickangle=-90)
+# fig.update_layout(margin=dict(l=180, r=140, b=240, t=120))
+# fig.update_traces(
+#     selector=dict(type="heatmap"),
+#     colorbar=dict(
+#         title=dict(text="Similarity Score", side="top"),
+#         len=0.85, y=0.5, yanchor="middle",
+#     ),
+# )
+# fig.write_html(str(REVIEWS_DIR / "bertopic_heatmap.html"))
+#
+# # Top-60 hierarchy dendrogram
+# fig = topic_model.visualize_hierarchy(top_n_topics=60, width=1100, height=1200)
+# fig.update_layout(margin=dict(l=300, r=20, b=40, t=80))
+# fig.write_html(str(REVIEWS_DIR / "bertopic_hierarchy.html"))
+#
+# # Top-N documents scatter (reuses the 2D coords from above)
+# top_topics = (
+#     topic_model.get_topic_info()
+#     .query("Topic != -1")
+#     .nlargest(TOP_N_TOPICS_VIZ, "Count")["Topic"]
+#     .tolist()
+# )
+# fig = topic_model.visualize_documents(
+#     review_texts,
+#     embeddings=embeddings,
+#     reduced_embeddings=coords,
+#     topics=top_topics,
+#     hide_annotations=True,
+#     sample=min(1.0, 8000 / max(len(review_texts), 1)),
+#     width=1600,
+# )
+# x_lo, x_hi = np.percentile(coords[:, 0], [1, 99])
+# y_lo, y_hi = np.percentile(coords[:, 1], [1, 99])
+# x_pad = (x_hi - x_lo) * 0.03
+# y_pad = (y_hi - y_lo) * 0.03
+# fig.update_layout(
+#     xaxis=dict(range=[x_lo - x_pad, x_hi + x_pad]),
+#     yaxis=dict(range=[y_lo - y_pad, y_hi + y_pad]),
+#     margin=dict(l=60, r=500, b=60, t=80),
+#     legend=dict(font=dict(size=10), itemsizing="constant",
+#                 x=1.02, xanchor="left", y=1.0),
+# )
+# fig.write_html(str(REVIEWS_DIR / "bertopic_documents.html"))
 
 # DataMap on a small subset (datamapplot's 256-bin palette branch breaks on full corpus)
+# Kept active: this file is loaded by the Streamlit dashboard (app.py) as the
+# "Topic Modeling - Document Datamap" panel.
 n = int(len(topics) * 0.01)
 subset_topic_model = copy.copy(topic_model)
 subset_topic_model.topics_ = subset_topic_model.topics_[:n]
