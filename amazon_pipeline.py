@@ -1053,16 +1053,16 @@ plt.show()
 # )
 # fig.write_html(str(REVIEWS_DIR / "bertopic_documents.html"))
 
-# DataMap on a small subset (datamapplot's 256-bin palette branch breaks on full corpus)
+# DataMap on the full corpus.
 # Kept active: this file is loaded by the Streamlit dashboard (app.py) as the
 # "Topic Modeling - Document Datamap" panel.
-n = int(len(topics) * 0.01)
-subset_topic_model = copy.copy(topic_model)
-subset_topic_model.topics_ = subset_topic_model.topics_[:n]
-fig = subset_topic_model.visualize_document_datamap(
-    review_texts[:n],
-    embeddings=embeddings[:n],
+# NOTE: the original code subsampled to 1% because of a datamapplot 256-color
+# palette bug. We try the full corpus; if it breaks, revert to a sample.
+fig = topic_model.visualize_document_datamap(
+    review_texts,
+    embeddings=embeddings,
     interactive=True,
+    int_datamap_kwds={"darkmode": True},
 )
 fig.save(str(REVIEWS_DIR / "bertopic_document_datamap.html"))
 

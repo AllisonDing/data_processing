@@ -922,7 +922,7 @@ def render_review_cards(search_results: pd.DataFrame) -> None:
         st.info("No matching reviews for the current filters.")
         return
     cards = []
-    for _, row in search_results.head(14).iterrows():
+    for _, row in search_results.iterrows():
         text = html.escape(str(row.get("review_text", ""))[:150])
         category = html.escape(str(row.get("category", "")))
         topic = html.escape(str(row.get("topic_label", "")))
@@ -941,7 +941,7 @@ def render_review_cards(search_results: pd.DataFrame) -> None:
             f'</div>'
         )
     st.markdown(
-        '<div style="height:372px;overflow-y:auto;padding-right:4px">'
+        '<div style="height:1180px;overflow-y:auto;padding-right:4px">'
         + "".join(cards)
         + "</div>",
         unsafe_allow_html=True,
@@ -957,18 +957,18 @@ def render_topic_rows(topic_summary: pd.DataFrame) -> None:
         name = html.escape(str(row["topic_label"]))
         reviews = int(row["reviews"])
         sentiment = float(row["avg_sentiment"])
+        avg_rating = float(row["avg_rating"])
         rows.append(
-            f"""
-            <div class="topic-row">
-                <div>
-                    <div class="topic-name">{name}</div>
-                    <div class="source-note">sentiment {sentiment:.2f} | rating {float(row["avg_rating"]):.2f}</div>
-                </div>
-                <div class="topic-stat">{reviews:,}</div>
-            </div>
-            """
+            f'<div class="topic-row"><div><div class="topic-name">{name}</div>'
+            f'<div class="source-note">sentiment {sentiment:.2f} | rating {avg_rating:.2f}</div>'
+            f'</div><div class="topic-stat">{reviews:,}</div></div>'
         )
-    st.markdown("".join(rows), unsafe_allow_html=True)
+    st.markdown(
+        '<div style="height:800px;overflow-y:auto;padding-right:4px">'
+        + "".join(rows)
+        + "</div>",
+        unsafe_allow_html=True,
+    )
 
 
 def product_scatter(products: pd.DataFrame) -> go.Figure:
@@ -1243,8 +1243,10 @@ def main() -> None:
         viz_reviews = reviews
     if review_query:
         topics_reviews = viz_reviews[viz_reviews["topic_label"].isin(review_query)]
+        viz_products = products[products["product_id"].isin(topics_reviews["product_id"])]
     else:
         topics_reviews = viz_reviews
+        viz_products = products
     review_query_str = " ".join(review_query) if review_query else ""
     search_results = search_reviews(reviews, categories, review_query_str, len(reviews), min_similarity, sentiment_filter)
     topic_summary = topic_summary_frame(topics_reviews)
@@ -1265,23 +1267,24 @@ def main() -> None:
         else:
             st.info("Not enough data to compute monthly review volume.")
 
+    PANEL_H = 1280
     row2_left, row2_mid, row2_right = st.columns([1.0, 1.6, 1.1], gap="small")
     with row2_left:
-        with st.container(border=True):
+        with st.container(border=True, height=PANEL_H):
             st.markdown("<div class='panel-title'>Review Search</div>", unsafe_allow_html=True)
             st.markdown("<div class='panel-caption'>Semantic-style retrieval over unstructured customer text.</div>", unsafe_allow_html=True)
             render_review_cards(search_results)
     with row2_mid:
-        with st.container(border=True):
+        with st.container(border=True, height=PANEL_H):
             st.markdown("<div class='panel-title'>Topic Modeling - Document Datamap</div>", unsafe_allow_html=True)
             st.markdown("<div class='panel-caption'>Interactive cluster map produced by the pipeline — drag to pan, scroll to zoom, hover to read.</div>", unsafe_allow_html=True)
             datamap_html = load_datamap_html()
             if datamap_html is not None:
-                components.html(datamap_html, height=580, scrolling=False)
+                components.html(datamap_html, height=1180, scrolling=False)
             else:
                 st.info("Document datamap not found. Click 'Run Pipeline' to generate it.")
     with row2_right:
-        with st.container(border=True):
+        with st.container(border=True, height=PANEL_H):
             st.markdown("<div class='panel-title'>Embedding and Topics</div>", unsafe_allow_html=True)
             st.markdown("<div class='panel-caption'>UMAP/HDBSCAN-style cluster map for review themes.</div>", unsafe_allow_html=True)
             st.plotly_chart(topic_scatter(topics_reviews), use_container_width=True)
@@ -1290,17 +1293,17 @@ def main() -> None:
     bottom_left, bottom_mid, bottom_right = st.columns(3, gap="small")
     with bottom_left:
         with st.container(border=True):
-            sentiment = sentiment_figure(viz_reviews)
+            sentiment = sentiment_figure(topics_reviews)
             if sentiment is not None:
                 st.plotly_chart(sentiment, use_container_width=True)
             else:
                 st.info("No review dates available for sentiment timeline.")
     with bottom_mid:
         with st.container(border=True):
-            st.plotly_chart(rating_histogram(products), use_container_width=True)
+            st.plotly_chart(rating_histogram(viz_products), use_container_width=True)
     with bottom_right:
         with st.container(border=True):
-            corr = correlation_figure(products, viz_reviews)
+            corr = correlation_figure(viz_products, topics_reviews)
             if corr is not None:
                 st.plotly_chart(corr, use_container_width=True)
             else:
